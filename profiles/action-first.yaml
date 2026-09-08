@@ -12,8 +12,8 @@ sentence_hard_review_chars: 85
 paragraph_max_sentences: 3
 parallel_list_threshold: 2
 list_chunk_soft_max_items: 5
-require_completion_condition: true
-require_failure_recovery_hint: when_relevant
+require_completion_condition: when_supported_by_input
+require_failure_recovery_hint: when_relevant_and_supported_by_input
 preserve_technical_terms: true
 preserve_uncertainty: true
 preserve_critical_details: true

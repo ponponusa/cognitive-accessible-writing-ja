@@ -89,19 +89,19 @@ W3C COGA は、具体的・字義どおりの表現を推奨し、
 ## 主要参考文献
 
 1. W3C Cognitive and Learning Disabilities Accessibility Task Force.  
-   *Making Content Usable for People with Cognitive and Learning Disabilities*. 2021.
+   [*Making Content Usable for People with Cognitive and Learning Disabilities*](https://www.w3.org/TR/2021/NOTE-coga-usable-20210429/). 2021.
 
 2. Casimiro, C. et al.  
    *What Matters in Accessible Written Communication for Neurodivergent People? A Scoping Review*.  
-   Scandinavian Journal of Disability Research, 2026. DOI: 10.16993/sjdr.1297
+   Scandinavian Journal of Disability Research, 2026. [DOI: 10.16993/sjdr.1297](https://doi.org/10.16993/sjdr.1297)
 
 3. Ledoyen, F. et al.  
    *Facilitating Cognitive Accessibility with LLMs: A Multi-Task Approach to Easy-to-Read Text Generation*.  
-   EMNLP 2025, ACL Anthology: 2025.emnlp-main.596
+   EMNLP 2025, [ACL Anthology: 2025.emnlp-main.596](https://aclanthology.org/2025.emnlp-main.596/)
 
 4. 文化審議会.  
-   『公用文作成の考え方』. 文化庁, 2022.
+   [『公用文作成の考え方』](https://www.bunka.go.jp/seisaku/kokugo_nihongo/kokugo_shisaku/94336802.html). 文化庁, 2022.
 
 5. Dillon, B., Clifton, C., & Frazier, L.  
    *Pushed aside: Parentheticals, memory and processing*.  
-   Language, Cognition and Neuroscience, 2014. DOI: 10.1080/01690965.2013.866684
+   Language, Cognition and Neuroscience, 2014. [DOI: 10.1080/01690965.2013.866684](https://doi.org/10.1080/01690965.2013.866684)
