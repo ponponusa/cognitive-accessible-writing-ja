@@ -11,6 +11,20 @@ lint_text = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = lint_text
 SPEC.loader.exec_module(lint_text)
 
+ISSUE_5_PROSE = (
+    "設定ファイルの必須項目を確認したうえで、出力先のディスク残量を見てください。\n"
+    "残量が不足している場合は、古い出力を退避してから再実行してください。\n"
+    "退避先のパスは運用手順書に記載しています。\n"
+)
+ISSUE_5_TABLE = (
+    "## 判定\n\n"
+    "| 観点 | 判定 | 根拠 |\n|---|---|---|\n"
+    "| 設計 | 🟢 | 指摘なし |\n"
+    "| 実装 | 🟡 | 二つのモジュールで日付の扱いが揃っていない |\n"
+    "| テスト | 🟢 | 3 パターンを網羅している |\n"
+    "| 性能 | 🟢 | 追加コストなし |\n\n"
+)
+
 
 class LintTextTests(unittest.TestCase):
     def rules(self, text: str, profile: str = "balanced") -> set[str]:
@@ -60,9 +74,10 @@ class LintTextTests(unittest.TestCase):
                         "\n".join(f"{marker} {item}{ending}" for item in items),
                         "low-interruption",
                     )
-                    self.assertEqual(report["metrics"]["sentences"], 4)
-                    self.assertEqual(report["metrics"]["max_sentence_chars"], 8 + len(ending))
-                    self.assertEqual(report["metrics"]["paragraphs"], 4)
+                    metrics = report["metrics"]["by_kind"]["list_item"]
+                    self.assertEqual(metrics["sentences"], 4)
+                    self.assertEqual(metrics["max_sentence_chars"], 8 + len(ending))
+                    self.assertEqual(metrics["paragraphs"], 4)
                     self.assertNotIn("dense-paragraph", {f["rule"] for f in report["findings"]})
 
     def test_one_sentence_per_line_is_not_dense(self) -> None:
@@ -92,7 +107,7 @@ class LintTextTests(unittest.TestCase):
             "- 終了します。",
             "low-interruption",
         )
-        self.assertEqual(report["metrics"]["sentences"], 5)
+        self.assertEqual(report["metrics"]["by_kind"]["list_item"]["sentences"], 5)
         dense = [f for f in report["findings"] if f["rule"] == "dense-paragraph"]
         self.assertEqual(len(dense), 1)
         self.assertNotIn("保存", dense[0]["excerpt"])
@@ -111,9 +126,10 @@ class LintTextTests(unittest.TestCase):
                     f"| 設計 | 🟡 | {cell}{ending} |\n"
                     "| テスト | 🟢 | 追加テストは 3 パターンを網羅している |"
                 )
-                self.assertEqual(report["metrics"]["sentences"], 10)
-                self.assertEqual(report["metrics"]["median_sentence_chars"], 2)
-                self.assertEqual(report["metrics"]["max_sentence_chars"], 74 + len(ending))
+                metrics = report["metrics"]["all_units"]
+                self.assertEqual(metrics["sentences"], 10)
+                self.assertEqual(metrics["median_sentence_chars"], 2)
+                self.assertEqual(metrics["max_sentence_chars"], 74 + len(ending))
                 long = [f for f in report["findings"] if f["rule"] == "long-sentence"]
                 self.assertEqual(len(long), 1)
                 self.assertEqual(long[0]["excerpt"], cell + ending)
@@ -125,7 +141,11 @@ class LintTextTests(unittest.TestCase):
         for table in (with_pipes, without_pipes):
             with self.subTest(table=table):
                 report = lint_text.analyze_text(table)
-                self.assertEqual(report["metrics"], expected["metrics"])
+                self.assertEqual(report["metrics"]["all_units"], expected["metrics"]["all_units"])
+                self.assertEqual(
+                    report["metrics"]["by_kind"]["table_cell"],
+                    expected["metrics"]["by_kind"]["prose"],
+                )
                 self.assertEqual(report["findings"], expected["findings"])
 
     def test_escaped_pipes_and_inline_code_stay_within_cells(self) -> None:
@@ -134,7 +154,7 @@ class LintTextTests(unittest.TestCase):
             "| A\\|B | `left|right` を確認します |"
         )
         expected = lint_text.analyze_text("項目\n\n内容\n\nA|B\n\nを確認します")
-        self.assertEqual(report["metrics"], expected["metrics"])
+        self.assertEqual(report["metrics"]["all_units"], expected["metrics"]["all_units"])
 
     def test_soft_wrapped_sentence_is_checked_as_one_sentence(self) -> None:
         report = lint_text.analyze_text("設定ファイルを開いて\n接続先を確認します。")
@@ -153,8 +173,76 @@ class LintTextTests(unittest.TestCase):
             "```text\n無視します。無視します。無視します。\n```"
         )
         report = lint_text.analyze_text(text, "low-interruption")
-        self.assertEqual(report["metrics"]["sentences"], 6)
+        self.assertEqual(report["metrics"]["all_units"]["sentences"], 6)
+        for kind in ("prose", "table_cell", "list_item"):
+            self.assertEqual(report["metrics"]["by_kind"][kind]["sentences"], 2)
         self.assertNotIn("dense-paragraph", {f["rule"] for f in report["findings"]})
+
+    def test_prose_statistics_are_unaffected_by_tables_and_lists(self) -> None:
+        for profile in lint_text.PROFILES:
+            baseline = lint_text.analyze_text(ISSUE_5_PROSE, profile)["metrics"]
+            self.assertEqual(baseline["sentences"], 3)
+            self.assertEqual(baseline["median_sentence_chars"], 34)
+            self.assertEqual(baseline["max_sentence_chars"], 38)
+            for extra in (ISSUE_5_TABLE, ISSUE_5_TABLE * 3, "- 確認\n- 🟢\n\n"):
+                with self.subTest(profile=profile, extra=extra):
+                    metrics = lint_text.analyze_text(extra + ISSUE_5_PROSE, profile)["metrics"]
+                    for key, value in baseline["by_kind"]["prose"].items():
+                        self.assertEqual(metrics[key], value)
+                    self.assertEqual(metrics["by_kind"]["prose"], baseline["by_kind"]["prose"])
+
+    def test_population_counts_and_combined_median_are_preserved(self) -> None:
+        metrics = lint_text.analyze_text(ISSUE_5_TABLE + ISSUE_5_PROSE)["metrics"]
+        self.assertEqual(metrics["by_kind"]["table_cell"]["sentences"], 15)
+        self.assertEqual(metrics["by_kind"]["table_cell"]["paragraphs"], 15)
+        self.assertEqual(metrics["by_kind"]["list_item"]["sentences"], 0)
+        self.assertEqual(metrics["all_units"]["sentences"], 18)
+        self.assertEqual(metrics["all_units"]["paragraphs"], 18)
+        self.assertEqual(metrics["all_units"]["median_sentence_chars"], 2)
+        for field in ("sentences", "paragraphs"):
+            self.assertEqual(
+                metrics["all_units"][field],
+                sum(values[field] for values in metrics["by_kind"].values()),
+            )
+
+    def test_short_and_unpunctuated_prose_is_not_filtered(self) -> None:
+        metrics = lint_text.analyze_text("はい。\n\n確認")["metrics"]
+        self.assertEqual(metrics["sentences"], 2)
+        self.assertEqual(metrics["median_sentence_chars"], 2.5)
+
+    def test_empty_prose_population_is_not_reported_as_zero_length(self) -> None:
+        for text in ("", "# 見出し\n```text\n本文\n```", ISSUE_5_TABLE, "- 確認"):
+            with self.subTest(text=text):
+                report = lint_text.analyze_text(text)
+                metrics = report["metrics"]
+                self.assertEqual(metrics["sentences"], 0)
+                self.assertIsNone(metrics["median_sentence_chars"])
+                self.assertIsNone(metrics["max_sentence_chars"])
+                for values in metrics["by_kind"].values():
+                    if values["sentences"] == 0:
+                        self.assertIsNone(values["median_sentence_chars"])
+                        self.assertIsNone(values["max_sentence_chars"])
+                self.assertIn("median n/a", lint_text.render_text_report(report))
+
+    def test_long_nonprose_units_remain_in_findings(self) -> None:
+        body = "条件と例外の確認が必要です" * 8
+        for text, kind in ((f"| 確認 |\n|---|\n| {body} |", "table_cell"), (f"- {body}", "list_item")):
+            with self.subTest(kind=kind):
+                report = lint_text.analyze_text(text)
+                self.assertEqual(report["metrics"]["sentences"], 0)
+                self.assertEqual(report["metrics"]["by_kind"][kind]["max_sentence_chars"], len(body))
+                self.assertEqual(report["metrics"]["all_units"]["max_sentence_chars"], len(body))
+                self.assertIn("very-long-sentence", {f["rule"] for f in report["findings"]})
+
+    def test_text_report_labels_each_population(self) -> None:
+        output = lint_text.render_text_report(lint_text.analyze_text(ISSUE_5_TABLE + ISSUE_5_PROSE))
+        lines = output.splitlines()
+        prose = next(line for line in lines if line.startswith("Metrics (prose):"))
+        table = next(line for line in lines if line.startswith("Metrics (table_cell):"))
+        combined = next(line for line in lines if line.startswith("Metrics (all_units):"))
+        self.assertIn("3 sentences, median 34 chars/sentence", prose)
+        self.assertIn("15 sentences", table)
+        self.assertIn("18 sentences, median 2.0 chars/sentence", combined)
 
 
 if __name__ == "__main__":

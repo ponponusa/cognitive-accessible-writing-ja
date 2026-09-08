@@ -14,7 +14,7 @@ import statistics
 import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Literal
 
 
 PROFILES = {
@@ -110,6 +110,12 @@ ROUND_CLOSE = {")": "(", "）": "（"}
 
 
 @dataclass(frozen=True)
+class TextUnit:
+    kind: Literal["prose", "table_cell", "list_item"]
+    text: str
+
+
+@dataclass(frozen=True)
 class Finding:
     rule: str
     severity: str
@@ -140,7 +146,7 @@ def is_table_separator(cells: list[str]) -> bool:
     return bool(cells) and all(re.fullmatch(r":?-{3,}:?", cell) for cell in cells)
 
 
-def markdown_units(text: str) -> list[str]:
+def markdown_units(text: str) -> list[TextUnit]:
     """Extract prose units for a lightweight, line-oriented Markdown lint.
 
     Table cells and list items are independent units. In ordinary prose,
@@ -148,7 +154,7 @@ def markdown_units(text: str) -> list[str]:
     soft-wrapped, unfinished sentences remain together. Indented continuation
     lines belong to their list item, including when they contain full sentences.
     """
-    units: list[str] = []
+    units: list[TextUnit] = []
     pending: list[str] = []
     list_indent: int | None = None
     in_table = False
@@ -156,7 +162,8 @@ def markdown_units(text: str) -> list[str]:
     def flush() -> None:
         nonlocal list_indent
         if pending:
-            units.append(" ".join(pending))
+            kind = "list_item" if list_indent is not None else "prose"
+            units.append(TextUnit(kind, " ".join(pending)))
             pending.clear()
         list_indent = None
 
@@ -177,7 +184,7 @@ def markdown_units(text: str) -> list[str]:
             flush()
             in_table = True
             if not is_table_separator(cells):
-                units.extend(cell for cell in cells if cell)
+                units.extend(TextUnit("table_cell", cell) for cell in cells if cell)
             continue
         in_table = False
 
@@ -211,12 +218,17 @@ def markdown_units(text: str) -> list[str]:
     return units
 
 
-def strip_nonprose(text: str) -> str:
-    """Remove code/markup and separate prose units with blank lines."""
+def extract_units(text: str) -> list[TextUnit]:
+    """Remove code/markup while retaining each unit's structural kind."""
     text = CODE_FENCE_RE.sub("\n\n", text)
     text = INLINE_CODE_RE.sub("", text)
     text = MARKDOWN_LINK_RE.sub(r"\1", text)
-    return "\n\n".join(markdown_units(text))
+    return markdown_units(text)
+
+
+def strip_nonprose(text: str) -> str:
+    """Remove code/markup and separate all analysis units with blank lines."""
+    return "\n\n".join(unit.text for unit in extract_units(text))
 
 
 def normalize_excerpt(text: str, limit: int = 100) -> str:
@@ -297,12 +309,26 @@ def count_paragraph_sentences(text: str) -> Iterable[tuple[str, int]]:
             yield paragraph, count
 
 
+def summarize_units(units: list[TextUnit]) -> dict:
+    """Measure a specific population; empty length distributions are unknown."""
+    text = "\n\n".join(unit.text for unit in units)
+    lengths = [len(re.sub(r"\s+", "", sentence)) for sentence in split_sentences(text)]
+    return {
+        "characters": len(text),
+        "sentences": len(lengths),
+        "median_sentence_chars": statistics.median(lengths) if lengths else None,
+        "max_sentence_chars": max(lengths) if lengths else None,
+        "paragraphs": len(units),
+    }
+
+
 def analyze_text(text: str, profile_name: str = "balanced") -> dict:
     if profile_name not in PROFILES:
         raise ValueError(f"Unknown profile: {profile_name}")
 
     cfg = PROFILES[profile_name]
-    prose = strip_nonprose(text)
+    units = extract_units(text)
+    prose = "\n\n".join(unit.text for unit in units)
     sentences = split_sentences(prose)
     findings: list[Finding] = []
 
@@ -422,16 +448,18 @@ def analyze_text(text: str, profile_name: str = "balanced") -> dict:
     severity_order = {"error": 0, "warning": 1, "info": 2}
     findings.sort(key=lambda item: (severity_order[item.severity], item.rule))
 
+    by_kind = {
+        kind: summarize_units([unit for unit in units if unit.kind == kind])
+        for kind in ("prose", "table_cell", "list_item")
+    }
     return {
         "profile": profile_name,
         "metrics": {
-            "characters": len(prose),
-            "sentences": len(sentences),
-            "median_sentence_chars": statistics.median(lengths) if lengths else 0,
-            "max_sentence_chars": max(lengths) if lengths else 0,
+            **by_kind["prose"],
             "parenthetical_segments": parenthetical_count,
             "parenthetical_max_depth": max_depth,
-            "paragraphs": sum(1 for _ in re.split(r"\n\s*\n", prose) if _.strip()),
+            "by_kind": by_kind,
+            "all_units": summarize_units(units),
         },
         "findings": [asdict(finding) for finding in findings],
         "notice": (
@@ -443,18 +471,28 @@ def analyze_text(text: str, profile_name: str = "balanced") -> dict:
 
 def render_text_report(report: dict) -> str:
     metrics = report["metrics"]
-    lines = [
-        f"Profile: {report['profile']}",
-        (
-            "Metrics: "
-            f"{metrics['characters']} chars, "
-            f"{metrics['sentences']} sentences, "
-            f"median {metrics['median_sentence_chars']} chars/sentence, "
-            f"max {metrics['max_sentence_chars']}, "
-            f"{metrics['parenthetical_segments']} parenthetical segments"
-        ),
-        "",
+    lines = [f"Profile: {report['profile']}"]
+    populations = [
+        ("prose", metrics["by_kind"]["prose"]),
+        ("table_cell", metrics["by_kind"]["table_cell"]),
+        ("list_item", metrics["by_kind"]["list_item"]),
+        ("all_units", metrics["all_units"]),
     ]
+    for label, values in populations:
+        median = values["median_sentence_chars"]
+        maximum = values["max_sentence_chars"]
+        lines.append(
+            f"Metrics ({label}): {values['characters']} chars, "
+            f"{values['sentences']} sentences, "
+            f"median {median if median is not None else 'n/a'} chars/sentence, "
+            f"max {maximum if maximum is not None else 'n/a'}, "
+            f"{values['paragraphs']} units"
+        )
+    lines.extend([
+        f"Parentheticals (all_units): {metrics['parenthetical_segments']} segments, "
+        f"max depth {metrics['parenthetical_max_depth']}",
+        "",
+    ])
 
     findings = report["findings"]
     if not findings:
