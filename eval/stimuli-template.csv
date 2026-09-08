@@ -1,0 +1,4 @@
+stimulus_id,genre,source_id,condition,profile,ablation,parentheses_count,critical_atoms,major_atoms,main_question,condition_question,exception_question,next_action_question,notes
+T001,technical_explanation,S001,A,none,baseline,,,,,,,,
+T002,procedure,S002,B,generic_concise,generic_concise,,,,,,,,
+T003,decision_memo,S003,C,low-interruption,full,,,,,,,,

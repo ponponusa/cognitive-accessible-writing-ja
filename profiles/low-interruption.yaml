@@ -1,0 +1,17 @@
+version: 1
+name: low-interruption
+description: 括弧、挿入句、脱線を最小化する
+answer_position: first
+detail_delivery: separate_sections
+parenthetical_policy: avoid_except_notation
+literal_language: prefer
+explicit_referents: high
+term_consistency: strict
+sentence_soft_max_chars: 50
+sentence_hard_review_chars: 75
+paragraph_max_sentences: 2
+parallel_list_threshold: 3
+list_chunk_soft_max_items: 5
+preserve_technical_terms: true
+preserve_uncertainty: true
+preserve_critical_details: true

@@ -1,0 +1,119 @@
+# Cognitive Accessible Writing JA
+
+日本語のAI出力を、**意味を保ちながら、読み手が希望する順序・詳しさ・表現に整える** Agent Skill の草案です。
+
+調査日: 2026-09-08  
+状態: 研究・検証用 v0.1.0-draft
+
+## このスキルでできること
+
+「結論を先に読みたい」「括弧による中断を減らしたい」「詳しい説明を見出しで整理したい」といった希望に合わせて、文章を整えます。
+
+読みやすい形式は、人や目的、利用状況によって異なります。
+同じ人でも、要点だけを確認したいときと、詳しく検討したいときで設定を変えられます。
+
+文章を整えるときは、次を重視します。
+
+- 日本語の主語省略、指示語、括弧などを文脈に合わせて整理する
+- 条件、例外、数値など、判断に必要な情報を保つ
+- 読み手が示した希望を、用意された設定より優先する
+- 実際に読む人と一緒に、文章の使いやすさを確かめる
+
+関連する取り組みは [既存スキルのレビュー](references/existing-skills-review.md) にまとめています。
+
+## 文章を整える仕組み
+
+### 1. 意味台帳
+
+書き換え前に、条件、例外、否定、不確実性、数値、引用、コードなどを抽出します。  
+書き換え後に照合し、読みやすさのための意味欠落を防ぎます。
+
+### 2. 括弧の役割別変換
+
+括弧を機械的に削除しません。
+
+- 条件や例外は独立した文へ移す
+- 例は「例:」として分離する
+- 定義は二文に分ける
+- 出典や技術記法は保持する
+- 不要な雑学だけを削る
+
+### 3. 設定可能なプロファイル
+
+次のような希望を組み合わせます。
+
+- 中断の少なさ
+- 結論の位置
+- 明示性
+- 情報密度
+- 比喩の許容度
+- 詳細の階層化
+- 次の行動の強調
+
+### 4. 読み手と一緒に検証する
+
+自動リントは補助です。  
+理解度、探索時間、主観的負荷、意味保存を、読み手を含む比較試験で確認します。
+
+## 構成
+
+```text
+cognitive-accessible-writing-ja/
+├── SKILL.md
+├── README.md
+├── LICENSE
+├── profiles/
+│   ├── balanced.yaml
+│   ├── low-interruption.yaml
+│   ├── action-first.yaml
+│   ├── literal-explicit.yaml
+│   ├── deep-navigable.yaml
+│   └── minimal.yaml
+├── references/
+│   ├── evidence-basis.md
+│   ├── japanese-rules.md
+│   └── existing-skills-review.md
+├── examples/
+│   └── before-after.md
+├── eval/
+│   ├── evaluation-protocol.md
+│   ├── semantic-fidelity-checklist.md
+│   └── stimuli-template.csv
+├── scripts/
+│   └── lint_text.py
+└── tests/
+    └── test_lint_text.py
+```
+
+## 導入例
+
+Codex、Claude Code、その他の Agent Skills 対応環境で、フォルダごとスキル配置先へコピーします。
+
+実際の配置方法はホストごとに異なります。  
+`SKILL.md` 単体でも使えますが、検証時は `profiles/` と `eval/` も残してください。
+
+## リント
+
+外部ライブラリは不要です。
+
+```bash
+python scripts/lint_text.py input.md --profile low-interruption
+python scripts/lint_text.py input.md --profile balanced --json
+python -m unittest discover -s tests
+```
+
+リント結果は「アクセシブルかどうか」の点数ではありません。  
+長文、括弧、二重否定、曖昧な指示語など、レビュー候補を列挙します。
+
+## 推奨する最初の検証
+
+AIの回答を30件程度集め、次の三条件で比較します。
+
+- A: 元の回答
+- B: 「簡潔にして」とだけ指示した回答
+- C: 本スキルを適用した回答
+
+まず、括弧の変換だけを有効・無効にしたアブレーション試験を行います。  
+これにより、改善が「単なる短文化」ではなく、括弧処理によるものかを分離できます。
+
+詳細は `eval/evaluation-protocol.md` を参照してください。
