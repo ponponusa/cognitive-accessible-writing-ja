@@ -1,9 +1,14 @@
 # Cognitive Accessible Writing JA
 
-日本語のAI出力を、**意味を保ちながら、読み手が希望する順序・詳しさ・表現に整える** Agent Skill の草案です。
+日本語のAI出力を、**意味を保ちながら、読み手が希望する順序・詳しさ・表現に整える** Agent Skill です。
 
-調査日: 2026-09-08  
-状態: 研究・検証用 v0.1.0-draft
+リリース: [0.1.0](https://github.com/ponponusa/cognitive-accessible-writing-ja/releases/tag/0.1.0)  
+ライセンス: [MIT](LICENSE)
+
+研究・検証段階のスキルです。文章変換の規則と評価手順を提供しており、読み手を含む有効性検証は今後の課題です。
+
+文章の生成・書き換えは、[SKILL.md](SKILL.md) を読み込んだAIエージェントが行います。
+同梱の Python リントは、文章の統計と見直し候補を出力する補助ツールです。文章の書き換えや原文との意味の照合は行いません。
 
 ## このスキルでできること
 
@@ -17,7 +22,7 @@
 - 日本語の主語省略、指示語、括弧などを文脈に合わせて整理する
 - 条件、例外、数値など、判断に必要な情報を保つ
 - 読み手が示した希望を、用意された設定より優先する
-- 実際に読む人と一緒に、文章の使いやすさを確かめる
+- 実際に読む人と文章の使いやすさを確かめるための評価手順を用意する
 
 関連する取り組みは [既存スキルのレビュー](references/existing-skills-review.md) にまとめています。
 
@@ -47,15 +52,19 @@
 
 ### 3. 設定可能なプロファイル
 
-次のような希望を組み合わせます。
+次の6種類から選びます。指定がなければ `balanced` を使い、読み手が明示した希望を優先します。
 
-- 中断の少なさ
-- 結論の位置
-- 明示性
-- 情報密度
-- 比喩の許容度
-- 詳細の階層化
-- 次の行動の強調
+| プロファイル | 整え方 |
+|---|---|
+| `balanced` | 結論先行と意味保持を両立する標準形 |
+| `low-interruption` | 括弧・挿入句・脱線を減らす |
+| `action-first` | 操作順を示し、入力から決まる場合は完了条件も示す |
+| `literal-explicit` | 入力から分かる主体・対象・参照先を明示する |
+| `deep-navigable` | 詳細を削らず、見出しで探索しやすくする |
+| `minimal` | 答えと判断に必要な条件・注意に絞る |
+
+変換方針は [profiles/](profiles/) に定義しています。
+リントの `--profile` はスクリプト内の同名の検査基準を選びます。YAML ファイルは読み込まないため、YAML の編集だけではリントの基準は変わりません。
 
 ### 4. 長い段落を文脈に合わせて改行する
 
@@ -68,7 +77,8 @@
 ### 5. 読み手と一緒に検証する
 
 自動リントは補助です。  
-理解度、探索時間、主観的負荷、意味保存を、読み手を含む比較試験で確認します。
+理解度、探索時間、主観的負荷、意味保存を、読み手を含む比較試験で確認するための [評価プロトコル](eval/evaluation-protocol.md) を同梱しています。
+この比較試験はまだ実施していません。
 
 ## 構成
 
@@ -103,20 +113,37 @@ cognitive-accessible-writing-ja/
 
 ## 導入例
 
-Codex、Claude Code、その他の Agent Skills 対応環境で、フォルダごとスキル配置先へコピーします。
+[リリース 0.1.0](https://github.com/ponponusa/cognitive-accessible-writing-ja/releases/tag/0.1.0) のソースアーカイブ、またはこのリポジトリを取得します。
+Codex、Claude Code、その他の Agent Skills 対応環境で、フォルダ名を `cognitive-accessible-writing-ja` にしてスキル配置先へコピーします。
 
-実際の配置方法はホストごとに異なります。  
-`SKILL.md` 単体でも使えますが、検証時は `profiles/` と `eval/` も残してください。
+実際の配置方法はホストごとに異なります。
+`SKILL.md` から同梱ファイルを参照するため、`profiles/`、`references/`、`examples/`、`eval/` を含むディレクトリ構成を保ってください。
+リントを使う場合は `scripts/`、テストを実行する場合は `tests/` も必要です。
+
+読み込んだエージェントへの依頼例:
+
+```text
+cognitive-accessible-writing-ja の low-interruption を使って、次の文章を整えてください。
+原文の条件と不確実性は保ってください。
+
+[書き換えたい文章]
+```
 
 ## リント
 
-外部ライブラリは不要です。
+Python 3 を使います。0.1.0 は Python 3.14.7 で動作確認しています。外部ライブラリは不要です。
+以下のコマンドは、このリポジトリのルートで実行します。
 
 ```bash
-python scripts/lint_text.py input.md --profile low-interruption
-python scripts/lint_text.py input.md --profile balanced --json
-python -m unittest discover -s tests
+python3 scripts/lint_text.py input.md --profile low-interruption
+python3 scripts/lint_text.py input.md --profile balanced --json
+python3 scripts/lint_text.py input.md --profile balanced --strict
+python3 -m unittest discover -s tests
 ```
+
+`input.md` は検査したい UTF-8 のファイルに置き換えます。入力ファイルを省略するか `-` を指定すると、標準入力を読みます。
+`--strict` は warning または error の指摘がある場合に終了コード `2` を返します。
+通常は指摘があっても `0`、入力ファイルの読み込み失敗などは `1` です。入力ファイルは変更しません。
 
 リント結果は「アクセシブルかどうか」の点数ではありません。  
 長文、括弧、二重否定、曖昧な指示語など、レビュー候補を列挙します。
@@ -171,7 +198,18 @@ python -m unittest discover -s tests
 従来の `metrics` 直下の5項目に相当する全体統計は、`metrics.all_units` へ移っています。保存済みの結果と比較する場合は、同じバージョンで再計算してください。
 Markdownの複雑な入れ子など、すべての構文に対応するパーサーではありません。
 
-## 推奨する最初の検証
+## 検証状況
+
+0.1.0 では、次の確認を行っています。
+
+- Python 3.14.7 でリントの既存テスト32件が成功
+- スキルの形式を検証
+- 同梱の変換例を、原文と明示された文脈に対して双方向に照合
+
+照合結果は [例の意味保存レビュー](eval/example-review.md) に記録しています。
+この照合は Codex による文書レビューです。モデル出力の反復試験、独立した人による評価、読み手の理解度試験は実施していません。
+
+## 今後の検証
 
 AIの回答を30件程度集め、次の三条件で比較します。
 
@@ -182,7 +220,4 @@ AIの回答を30件程度集め、次の三条件で比較します。
 まず、括弧の変換だけを有効・無効にしたアブレーション試験を行います。  
 これにより、改善が「単なる短文化」ではなく、括弧処理によるものかを分離できます。
 
-詳細は `eval/evaluation-protocol.md` を参照してください。
-
-同梱の変換例は [例の意味保存レビュー](eval/example-review.md) で照合しています。
-この照合は文書の整合性確認であり、実際の読み手による有効性検証ではありません。
+詳細は [評価プロトコル](eval/evaluation-protocol.md) を参照してください。
