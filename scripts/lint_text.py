@@ -105,6 +105,7 @@ LIST_ITEM_RE = re.compile(r"^(\s*)(?:[-+*]|\d+[.)])\s+(?:\[[ xX]\]\s+)?(.*)$")
 HEADING_RE = re.compile(r"^#{1,6}(?:\s|$)")
 THEMATIC_BREAK_RE = re.compile(r"^(?:(?:\*\s*){3,}|(?:-\s*){3,}|(?:_\s*){3,})$")
 SENTENCE_END_RE = re.compile(r"[。！？!?][\"'」』）)\]]*$")
+QUOTE_PREFIX_RE = re.compile(r"^ {0,3}>[ \t]?")
 ROUND_OPEN = {"(": ")", "（": "）"}
 ROUND_CLOSE = {")": "(", "）": "（"}
 
@@ -146,6 +147,15 @@ def is_table_separator(cells: list[str]) -> bool:
     return bool(cells) and all(re.fullmatch(r":?-{3,}:?", cell) for cell in cells)
 
 
+def strip_quote_prefix(line: str) -> tuple[int, str]:
+    """Remove nested quote markers while preserving content indentation."""
+    depth = 0
+    while match := QUOTE_PREFIX_RE.match(line):
+        depth += 1
+        line = line[match.end():]
+    return depth, line
+
+
 def markdown_units(text: str) -> list[TextUnit]:
     """Extract prose units for a lightweight, line-oriented Markdown lint.
 
@@ -153,11 +163,13 @@ def markdown_units(text: str) -> list[TextUnit]:
     a newline after a complete sentence or a Markdown hard break ends a unit;
     soft-wrapped, unfinished sentences remain together. Indented continuation
     lines belong to their list item, including when they contain full sentences.
+    Explicit quote-depth changes also end units; quoted content retains its kind.
     """
     units: list[TextUnit] = []
     pending: list[str] = []
     list_indent: int | None = None
     in_table = False
+    quote_depth = 0
 
     def flush() -> None:
         nonlocal list_indent
@@ -167,8 +179,12 @@ def markdown_units(text: str) -> list[TextUnit]:
             pending.clear()
         list_indent = None
 
-    lines = text.expandtabs(4).splitlines()
-    for index, raw_line in enumerate(lines):
+    lines = [strip_quote_prefix(line) for line in text.expandtabs(4).splitlines()]
+    for index, (depth, raw_line) in enumerate(lines):
+        if depth != quote_depth:
+            flush()
+            in_table = False
+            quote_depth = depth
         line = raw_line.strip()
         if not line:
             flush()
@@ -176,7 +192,9 @@ def markdown_units(text: str) -> list[TextUnit]:
             continue
 
         cells = split_table_cells(line)
-        next_cells = split_table_cells(lines[index + 1].strip()) if index + 1 < len(lines) else []
+        next_cells = []
+        if index + 1 < len(lines) and lines[index + 1][0] == depth:
+            next_cells = split_table_cells(lines[index + 1][1].strip())
         table_row = line.startswith("|") or (
             len(cells) > 1 and (in_table or is_table_separator(next_cells))
         )
@@ -218,8 +236,21 @@ def markdown_units(text: str) -> list[TextUnit]:
     return units
 
 
+def strip_frontmatter(text: str) -> str:
+    """Remove a closed frontmatter block only at the start of the document."""
+    text = text.removeprefix("\ufeff")
+    lines = text.splitlines(keepends=True)
+    if not lines or lines[0].rstrip("\r\n \t") != "---":
+        return text
+    for index, line in enumerate(lines[1:], start=1):
+        if line.rstrip("\r\n \t") in {"---", "..."}:
+            return "".join(lines[index + 1:])
+    return text
+
+
 def extract_units(text: str) -> list[TextUnit]:
     """Remove code/markup while retaining each unit's structural kind."""
+    text = strip_frontmatter(text)
     text = CODE_FENCE_RE.sub("\n\n", text)
     text = INLINE_CODE_RE.sub("", text)
     text = MARKDOWN_LINK_RE.sub(r"\1", text)

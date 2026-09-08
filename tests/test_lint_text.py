@@ -244,6 +244,108 @@ class LintTextTests(unittest.TestCase):
         self.assertIn("15 sentences", table)
         self.assertIn("18 sentences, median 2.0 chars/sentence", combined)
 
+    def test_frontmatter_is_excluded_from_metrics_and_findings(self) -> None:
+        metadata = (
+            'type: Survey\n'
+            'title: キャッシュ導入の調査\n'
+            'description: 検索結果のキャッシュを導入する前に、更新反映までの時間と画面要件を確認した。対象は一覧画面と詳細画面。\n'
+            'tags: [cache, survey]\n'
+            'generated: {by: tool, at: "2026-09-08T10:00:00+09:00"}\n'
+        )
+        body = '# キャッシュ導入の調査\n\n検索結果の表示にはキャッシュを使います。\n'
+        for closing in ('---', '...'):
+            for newline in ('\n', '\r\n'):
+                for bom in ('', '\ufeff'):
+                    with self.subTest(closing=closing, newline=newline, bom=bom):
+                        text = bom + ('---\n' + metadata + closing + '\n\n' + body).replace('\n', newline)
+                        report = lint_text.analyze_text(text)
+                        self.assertEqual(report, lint_text.analyze_text(body))
+                        self.assertEqual(report['metrics']['sentences'], 1)
+                        self.assertEqual(report['metrics']['max_sentence_chars'], 20)
+
+    def test_frontmatter_only_document_has_no_analysis_units(self) -> None:
+        for text in ('---\ntitle: 調査\n---', '---\ndescription: |\n  長い説明。\n  続き。\n...\n'):
+            with self.subTest(text=text):
+                self.assertEqual(lint_text.analyze_text(text), lint_text.analyze_text(''))
+
+    def test_horizontal_rules_inside_body_do_not_remove_content(self) -> None:
+        for prefix in ('本文です。\n', '\n'):
+            with self.subTest(prefix=prefix):
+                text = prefix + '---\n調査内容です。\n---\n結論です。'
+                expected = prefix + '\n調査内容です。\n\n結論です。'
+                self.assertEqual(lint_text.analyze_text(text), lint_text.analyze_text(expected))
+
+    def test_unclosed_frontmatter_retains_content(self) -> None:
+        body = 'title: 調査\n\n本文は保持します。'
+        self.assertEqual(lint_text.analyze_text('---\n' + body), lint_text.analyze_text(body))
+
+    def test_indented_frontmatter_terminator_does_not_close_block(self) -> None:
+        text = '---\ndescription: |\n  ---\n  説明の続き。\n---\n本文です。'
+        self.assertEqual(lint_text.analyze_text(text), lint_text.analyze_text('本文です。'))
+
+    def test_quote_markers_do_not_change_list_metrics_or_findings(self) -> None:
+        content = (
+            '**確認事項**（反映には数分かかる）\n\n'
+            '- 設定ファイルの必須項目\n'
+            '- 出力先のディスク残量\n'
+            '- 直近のバックアップの日時\n'
+            '- 再起動の実施者\n\n'
+            '確認が終わったら再起動してください。'
+        )
+        intro = '導入手順は次のとおりです。\n\n'
+        for prefix in ('> ', '>', '>> ', '> > ', '  > '):
+            with self.subTest(prefix=prefix):
+                quoted = '\n'.join(prefix + line for line in content.splitlines())
+                report = lint_text.analyze_text(intro + quoted)
+                self.assertEqual(report, lint_text.analyze_text(intro + content))
+                self.assertEqual(report['metrics']['by_kind']['list_item']['sentences'], 4)
+                self.assertEqual(report['metrics']['sentences'], 3)
+                self.assertEqual(report['metrics']['max_sentence_chars'], 19)
+
+    def test_quote_blank_lines_and_depth_changes_separate_units(self) -> None:
+        quoted = '引用前\n> 外側\n>> 内側\n> 外側に戻る\n>\n> 別の段落\n引用後'
+        plain = '引用前\n\n外側\n\n内側\n\n外側に戻る\n\n別の段落\n\n引用後'
+        self.assertEqual(lint_text.analyze_text(quoted), lint_text.analyze_text(plain))
+
+    def test_quoted_headings_tables_and_code_use_existing_rules(self) -> None:
+        content = (
+            '# 見出し\n\n'
+            '| 項目 | 内容 |\n|---|---|\n| 設定 | 確認します。 |\n\n'
+            '別の表\n\n項目 | 内容\n--- | ---\n設定 | 保存します。\n\n'
+            '```python\nprint("(" * 200)\n```\n\n'
+            '- 確認します。\n  記録します。\n  - 完了します。'
+        )
+        quoted = '\n'.join('> ' + line for line in content.splitlines())
+        self.assertEqual(lint_text.analyze_text(quoted), lint_text.analyze_text(content))
+
+    def test_quote_depth_changes_reset_table_detection(self) -> None:
+        for text, expected in (
+            ('| 項目 |\n|---|\n| 内容 |\n> A | B', '| 項目 |\n|---|\n| 内容 |\n\nA | B'),
+            ('A | B\n> --- | ---', 'A | B\n\n--- | ---'),
+        ):
+            with self.subTest(text=text):
+                self.assertEqual(lint_text.analyze_text(text), lint_text.analyze_text(expected))
+
+    def test_literal_greater_than_is_preserved(self) -> None:
+        for text in ('値が 5 > 3 であることを確認します。', r'\> は記号です。'):
+            with self.subTest(text=text):
+                self.assertEqual(lint_text.extract_units(text)[0].text, text)
+
+    def test_long_quoted_content_is_still_checked(self) -> None:
+        text = '条件と例外の確認が必要です' * 8
+        for prefix, kind in (('> ', 'prose'), ('> - ', 'list_item')):
+            with self.subTest(kind=kind):
+                report = lint_text.analyze_text(prefix + text)
+                self.assertEqual(report['metrics']['by_kind'][kind]['max_sentence_chars'], len(text))
+                self.assertIn('very-long-sentence', {f['rule'] for f in report['findings']})
+
+    def test_frontmatter_is_not_removed_inside_a_quote(self) -> None:
+        quoted = '> ---\n> title: 引用内容\n> ---\n> 本文です。'
+        self.assertEqual(
+            lint_text.analyze_text(quoted),
+            lint_text.analyze_text('title: 引用内容\n\n本文です。'),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
