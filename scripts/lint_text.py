@@ -101,6 +101,10 @@ CODE_FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
 INLINE_CODE_RE = re.compile(r"`[^`\n]+`")
 MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)\]\([^)]+\)")
 SENTENCE_RE = re.compile(r"[^。！？!?\n]+[。！？!?]?")
+LIST_ITEM_RE = re.compile(r"^(\s*)(?:[-+*]|\d+[.)])\s+(?:\[[ xX]\]\s+)?(.*)$")
+HEADING_RE = re.compile(r"^#{1,6}(?:\s|$)")
+THEMATIC_BREAK_RE = re.compile(r"^(?:(?:\*\s*){3,}|(?:-\s*){3,}|(?:_\s*){3,})$")
+SENTENCE_END_RE = re.compile(r"[。！？!?][\"'」』）)\]]*$")
 ROUND_OPEN = {"(": ")", "（": "）"}
 ROUND_CLOSE = {")": "(", "）": "（"}
 
@@ -114,12 +118,105 @@ class Finding:
     position: int | None = None
 
 
+def split_table_cells(line: str) -> list[str]:
+    """Split structural pipes, keeping escaped pipes in their cell."""
+    cells: list[str] = []
+    start = 0
+    backslashes = 0
+    for index, char in enumerate(line):
+        if char == "|" and backslashes % 2 == 0:
+            cells.append(line[start:index].strip())
+            start = index + 1
+        backslashes = backslashes + 1 if char == "\\" else 0
+    cells.append(line[start:].strip())
+    if line.startswith("|"):
+        cells.pop(0)
+    if start == len(line) and line.endswith("|"):
+        cells.pop()
+    return [cell.replace(r"\|", "|") for cell in cells]
+
+
+def is_table_separator(cells: list[str]) -> bool:
+    return bool(cells) and all(re.fullmatch(r":?-{3,}:?", cell) for cell in cells)
+
+
+def markdown_units(text: str) -> list[str]:
+    """Extract prose units for a lightweight, line-oriented Markdown lint.
+
+    Table cells and list items are independent units. In ordinary prose,
+    a newline after a complete sentence or a Markdown hard break ends a unit;
+    soft-wrapped, unfinished sentences remain together. Indented continuation
+    lines belong to their list item, including when they contain full sentences.
+    """
+    units: list[str] = []
+    pending: list[str] = []
+    list_indent: int | None = None
+    in_table = False
+
+    def flush() -> None:
+        nonlocal list_indent
+        if pending:
+            units.append(" ".join(pending))
+            pending.clear()
+        list_indent = None
+
+    lines = text.expandtabs(4).splitlines()
+    for index, raw_line in enumerate(lines):
+        line = raw_line.strip()
+        if not line:
+            flush()
+            in_table = False
+            continue
+
+        cells = split_table_cells(line)
+        next_cells = split_table_cells(lines[index + 1].strip()) if index + 1 < len(lines) else []
+        table_row = line.startswith("|") or (
+            len(cells) > 1 and (in_table or is_table_separator(next_cells))
+        )
+        if table_row:
+            flush()
+            in_table = True
+            if not is_table_separator(cells):
+                units.extend(cell for cell in cells if cell)
+            continue
+        in_table = False
+
+        if HEADING_RE.match(line) or THEMATIC_BREAK_RE.fullmatch(line):
+            flush()
+            continue
+
+        hard_break = raw_line.endswith("  ") or line.endswith("\\")
+        if line.endswith("\\"):
+            line = line[:-1].rstrip()
+        item = LIST_ITEM_RE.match(raw_line)
+        if item:
+            flush()
+            list_indent = len(item.group(1))
+            body = item.group(2).strip()
+            if body.endswith("\\"):
+                body = body[:-1].rstrip()
+            if body:
+                pending.append(body)
+            continue
+
+        indent = len(raw_line) - len(raw_line.lstrip())
+        if list_indent is not None and indent <= list_indent:
+            flush()
+        if line:
+            pending.append(line)
+        if list_indent is None and (hard_break or SENTENCE_END_RE.search(line)):
+            flush()
+
+    flush()
+    return units
+
+
 def strip_nonprose(text: str) -> str:
-    """Remove fenced/inline code and retain link labels."""
-    text = CODE_FENCE_RE.sub("", text)
+    """Remove code/markup and separate prose units with blank lines."""
+    text = CODE_FENCE_RE.sub("\n\n", text)
     text = INLINE_CODE_RE.sub("", text)
     text = MARKDOWN_LINK_RE.sub(r"\1", text)
-    return text
+    return "\n\n".join(markdown_units(text))
 
 
 def normalize_excerpt(text: str, limit: int = 100) -> str:
@@ -134,8 +231,6 @@ def split_sentences(text: str) -> list[str]:
     for match in SENTENCE_RE.finditer(text):
         sentence = match.group(0).strip()
         if not sentence:
-            continue
-        if sentence.startswith(("#", "-", "*", "|")) and "。" not in sentence:
             continue
         sentences.append(sentence)
     return sentences
@@ -192,11 +287,10 @@ def count_parentheticals(text: str) -> tuple[int, int, list[Finding]]:
 
 
 def count_paragraph_sentences(text: str) -> Iterable[tuple[str, int]]:
+    """Count sentences in the normalized units returned by strip_nonprose."""
     for paragraph in re.split(r"\n\s*\n", text):
         paragraph = paragraph.strip()
         if not paragraph:
-            continue
-        if paragraph.startswith(("```", "#", "|")):
             continue
         count = len(split_sentences(paragraph))
         if count:
@@ -271,7 +365,7 @@ def analyze_text(text: str, profile_name: str = "balanced") -> dict:
                 rule="dense-paragraph",
                 severity="info",
                 message=(
-                    f"一段落に {count} 文あります。"
+                    f"一つの解析単位に {count} 文あります。"
                     f" 目安は {cfg['paragraph_max_sentences']} 文以下です。"
                 ),
                 excerpt=normalize_excerpt(paragraph),
